@@ -10,12 +10,14 @@
 -	Er worden grote delen code toegevoegd die niet gebruikt zullen worden. 
 -	Een gebruiker moet meer downloaden dan nodig is. 
 -	Snelheid van je website wordt aangetast. 
+-	Programmeur moet meer leren. 
 
 Er zijn veel websites die custom made Javascripts bieden, die kunnen net zoveel als bijvoorbeeld jQuery maar die hoeven niet zoveel in te laden. 
 
 ## Bronnen:
 https://davidwalsh.name/6-reasons-to-use-javascript-libraries-frameworks 
 http://www.giftofspeed.com/dont-use-javascript-libraries/ 
+http://bitworking.org/news/2014/05/zero_framework_manifesto
 
 # Voor- en nadelen single page web app 
 
