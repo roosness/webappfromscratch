@@ -1,423 +1,189 @@
-//      cmdgeo-0.2.js
-//      http://cmdgeo.nl
-//      J.P. Sturkenboom <j.p.sturkenboom@hva.nl>
-//      Copyleft 2013, all wrongs reversed.
-
-(function() {
-    'use strict';
-
-    // Create a default settings object, these are overrided once a settings file is loaded
-    var defaultSettings = {
-        'googleMapsKey': '',
-        'tourType': 'LINEAIR',
-        'mapOptions': { 'center': [52.35955620231157, 4.908019635968003], 'zoom': 15, 'mapTypeId': 'ROADMAP' },
-        'poiMarker': { 'path': 'CIRCLE', 'fillColor': 'GhostWhite', 'strokeColor': 'FireBrick' },
-        'posMarker': { 'path': 'BACKWARD_CLOSED_ARROW', 'fillColor': 'FireBrick', 'strokeColor': 'Black' },
-        'poiList' : []
-    };
-
-    // Create a safe reference to the cmdgeo object for use below.
-    var cmdgeo = function(obj) {
-        if (obj instanceof cmdgeo) { return obj; }
-        if (!(this instanceof cmdgeo)) { return new cmdgeo(obj); }
-        this.cmdgeowrapped = obj;
-    };
-
-    // Add cmdgeo as a global object
-    this.cmdgeo = cmdgeo;
-
-    // Current version
-    cmdgeo.VERSION = 0.2;
-
-    // Three vars we can't live without (or can we). cmdgeo.storage wil get a reference to
-    // either localStorage or sessionStorage through the function storageSupported()
-    // cmdgeo.settings wil be filled with the settings loaded externally through the
-    // function loadSettings(). They will be used as global vars by a lot of functions
-    // inside this module, this represents tight-coupling and i am aware of it.
-    cmdgeo.storage = cmdgeo.settings = cmdgeo.map = undefined;
-
-    ////////////////
-    // Predicates //
-    ////////////////
-
-    // Returns true if @x is not null
-    function existy(x) {
-        return x !== null;
-    }
-
-    // Returns true if @x is not false and not null
-    function truthy(x) {
-        return (x !== false) && existy(x);
-    }
-
-    // Returns true if client-side storage is supported
-    function storageSupported() {
-        return typeof Storage !== undefined ? cmdgeo.storage = sessionStorage : false;
-    }
-
-    // Returns true if settings are loaded correctly
-    function settingsLoaded() {
-        return isDefined(cmdgeo.settings);
-    }
-
-    // Returns true if we can use the geo API
-    function gpsInitialized() {
-        return geo_position_js.init();
-    }
-
-    // Returns true if the passed variable is defined
-    var isDefined = complement(_.isUndefined);
-
-    // Returns true if @key is defined in storage
-    function isDefinedInStorage(key) {
-        return isDefined(cmdgeo.storage[key]);
-    }
-
-    // Returns true if the name of @poi is defined in storage
-    function poiInStorage(poi) {
-        return isDefinedInStorage(poi.name);
-    }
-
-    // Returns the poi status (true/false)
-    function poiStatusInactive(poi) {
-        return cmdgeo.storage.getItem(poi.name) === "false";
-    }
-
-    // Returns true if @poi has an onEnter string longer than zero
-    function hasEnterTarget(poi) {
-        return _.isString(poi.onEnter) && poi.onEnter.length > 0;
-    }
-
-    // Returns true if @poi has an onEnter string longer than zero
-    function hasExitTarget(poi) {
-        return isDefined(poi.onExit) && _.isString(poi.onExit) && poi.onExit.length > 0;
-    }
-
-    /////////////
-    // Getters //
-    /////////////
-
-    // Use makeGetter() to create getter functions for the settings format
-    var getPoiList = makeGetter('poiList', defaultSettings);
-    var getTourType = makeGetter('tourType', defaultSettings);
-    var getMapOptions = makeGetter('mapOptions', defaultSettings);
-    var getPoiMarker = makeGetter('poiMarker', defaultSettings);
-    var getPosMarker = makeGetter('posMarker', defaultSettings);
-    var getGoogleMapsKey = makeGetter('googleMapsKey', defaultSettings);
-
-    //////////////
-    // Checkers //
-    //////////////
-
-    // Test what happens when a checker fails
-    var alwaysFail = validator("Failing deliberately", always(false));
-
-    // Returns true if the settings file is formatted correctly
-    // Todo:
-    // check overall structure
-    // check tour type
-    // check for unique names on poi's
-    // check for url to go to on enter or on exit, or both
-    var settingsFormatting = checker(
-
-    );
-
-    // Checks if requirements for storage are met
-    var storageRequirements = checker(
-        validator("Storage (localStorage/ sessionStorage) is not supported on your system, this app can't live without it.", storageSupported)
-    );
-
-    // Checks if requirements for tracking are met
-    var trackRequirements = checker(
-        validator("Unable to find settings, did you load them before calling the track() function?.", settingsLoaded),
-        validator("Unable to initialise GPS, this app can't live without it.", gpsInitialized)
-    );
-
-    // Checks if requirements to enter a @poi are met, requires @poi
-    var canEnterPoi = checker(
-        validator("Unable to find poi in storage, are you sure it's in your settings file?", poiInStorage),
-        validator("The poi does not have an onEnter property.", hasEnterTarget),
-        validator("The poi has to be inactive!", poiStatusInactive)
-    );
-
-    // Checks if requirements to exit a @poi are met, requires @poi
-    var canExitPoi = checker(
-        validator("Unable to find poi in storage, are you sure it's in your settings file?", poiInStorage),
-        validator("The poi does not have an onExit property.", hasExitTarget)
-    );
-
-    ////////////////////
-    // Tour functions //
-    ////////////////////
-
-    // Loads an external settings file from @url
-    cmdgeo.loadSettings = function loadSettings(url) {
-        // check if settings are loaded, set var in sessionStorage, dont't load when var is true
-        cmdgeo.settings = readFileContents(url);
-        errorDispatcher(settingsFormatting(cmdgeo.settings), fail);
-        populateStorage(cmdgeo.settings); // this is too much for this function
-    };
-
-    // Returns the contents of an external file (json) as a string. We use a variable
-    // here because the request API works like this. (note: Can i make this functional?)
-    function readFileContents(url) {
-        var request = chooseAppropriateRequestObject();
-        request.open("GET", url, false);
-        request.send(null);
-        return JSON.parse(request.responseText);
-    }
-
-    // Returns a request object that can read files based on the users browser environment
-    function chooseAppropriateRequestObject() {
-        return instantiateIfExists(window.XMLHttpRequest) || instantiateIfExists(window.ActiveXObject) || fail("Your platform doesn't support HTTP request objects");
-    }
-
-    // Fill storage with the poi's from the settings file, the locations in storage
-    // are used to decide if we have to call the enter or exit properties of the poi
-    function populateStorage(settings) {
-        errorDispatcher(storageRequirements(), fail);
-        _.each(getPoiList(settings), function (poi) {
-            return !(poi.name in cmdgeo.storage) ? cmdgeo.storage.setItem(poi.name, false) : false;
-        });
-    }
-
-    // Fire up the GPS update interval if GPS is available or fail horribly if it's not
-    cmdgeo.track = function track() {
-        errorDispatcher(trackRequirements(), fail);
-        updatePosition();
-    };
-
-    // Returns the radian value of @deg
-    function toRad(deg) {
-        return deg * (Math.PI / 180);
-    }
-
-    // Returns the distance between two GPS locations in meters ignoring landmarks,
-    // the distance is 'as the crow flies'. Calculated using the spherical law of
-    // cosines, 6376136 is the radius of earth in meters
-    function distance(c1, c2) {
-        return Math.acos(Math.sin(toRad(c1.latitude)) * Math.sin(toRad(c2.latitude)) + Math.cos(toRad(c1.latitude)) * Math.cos(toRad(c2.latitude)) * Math.cos(toRad(c2.longitude) - toRad(c1.longitude))) * 6376136;
-    }
-
-    // Call the update function from the geo.js API, it uses a callback structure
-    function updatePosition() {
-        return geo_position_js.getCurrentPosition(gotPosition, function (c,m) { fail(["geo.js", c, m].join(' ')); }, {enableHighAccuracy:true});
-    }
-
-    // Callback function that gets called by the update function from the geo.js API that our updatePosition() wraps
-    function gotPosition(pos) {
-        setTimeout(updatePosition, 500);
-        if(cmdgeo.map !== undefined) updateMap(pos);
-
-        // this has got to be changed.. ugly as hell
-        var poi = onPoi(pos.coords);
-        if(poi) {
-            if(poiStatusInactive(poi)) {
-                enterPoi(poi);
-            }
-        } else {
-            poi = findActivePoi();
-            if(poi) {
-                exitPoi(poi);
-            }
-        }
-    }
-
-    // Returns a poi if the current coordinate matches a POI's action-radius and false if there is no match
-    function onPoi(coord) {
-        return _.find(getPoiList(cmdgeo.settings), function (poi) {
-            return distance(coord, poi.coordinate) < poi.radius;
-        }, false) || false;
-    }
-
-    // Checks if @poi has a valid onEnter object and activates it
-    function enterPoi(poi) {
-        return !errorDispatcher(canEnterPoi(poi), note) ? activatePoi(poi) : undefined;
-    }
-
-    // Checks if @poi has a valid onExit object and deactivates it
-    function exitPoi(poi) {
-        return !errorDispatcher(canExitPoi(poi), note) ? deactivatePoi(poi) : changePoiStatus(poi, false);
-    }
-
-    // Searches for an active poi in cmdgeo.storage, then searches for the
-    // corresponding settings from cmdgeo.settings and returns it all.
-    function findActivePoi() {
-        return _.find(getPoiList(cmdgeo.settings), function (poi) {
-            return poi.name === _.find(_.keys(cmdgeo.storage), function (key) {
-                return cmdgeo.storage[key] === "true";
-            });
-        });
-    }
-
-    // Follows the onEnter url on @poi and sets its activity status to true
-    function activatePoi(poi) {
-        changePoiStatus(poi, true);
-        window.location = poi.onEnter;
-    }
-
-    // Follows the onExit url on @poi and sets its activity status to false
-    function deactivatePoi(poi) {
-        changePoiStatus(poi, false);
-        window.location = poi.onExit;
-    }
-
-    // Change the activity @status of @poi
-    function changePoiStatus(poi, status) {
-        note(poi.name + (status ? " activated" : " deactivated"));
-        cmdgeo.storage.setItem(poi.name, status);
-    }
-
-    /////////////////////////////
-    // Google maps API wrapper //
-    /////////////////////////////
-
-    // Load the google maps API asynchronously when needed, it has a callback to the drawmap function
-    cmdgeo.loadmap = function loadmap() {
-        var script = document.createElement('script');
-        script.src = 'https://maps.googleapis.com/maps/api/js?v=3.exp&sensor=true&key='+getGoogleMapsKey(cmdgeo.settings)+'&callback=cmdgeo.drawmap';
-        document.body.appendChild(script);
-    };
-
-    // Draws a google map on a HTML element with the id 'map_canvas'
-    cmdgeo.drawmap = function drawmap() {
-        formatSettings();
-        cmdgeo.map = new google.maps.Map(document.getElementById('map_canvas'), getMapOptions(cmdgeo.settings));
-        drawroute();
-    };
-
-    // Changes cmdgeo.settings to correspond with the google maps API (which wasn't loaded before )
-    function formatSettings() {
-        cmdgeo.settings.mapOptions.center = new google.maps.LatLng(cmdgeo.settings.mapOptions.center[0], cmdgeo.settings.mapOptions.center[1]);
-        cmdgeo.settings.mapOptions.mapTypeId = google.maps.MapTypeId[cmdgeo.settings.mapOptions.mapTypeId];
-        cmdgeo.settings.posMarker.path = google.maps.SymbolPath[cmdgeo.settings.posMarker.path];
-        cmdgeo.settings.poiMarker.path = google.maps.SymbolPath[cmdgeo.settings.poiMarker.path];
-    }
-
-    // Draw the route on the map, this function needs some extra work
-    function drawroute() {
-        // Add poi's to the route
-        cmdgeo.map.route = _.map(getPoiList(cmdgeo.settings), function (poi) {
-            return new google.maps.LatLng(poi.coordinate.latitude, poi.coordinate.longitude);
-        });
-
-        // Add markers to the poi's
-        cmdgeo.map.markers = _.map(getPoiList(cmdgeo.settings), function (poi, i) {
-            return new google.maps.Marker({ position: cmdgeo.map.route[i], map: cmdgeo.map, icon: getPoiMarker(cmdgeo.settings), title: poi.name });
-        });
-
-        // Draw lines between the poi's when this is a lineair route, the lines are as the crow flies
-        if(getTourType(cmdgeo.settings) === "LINEAIR"){
-            var route = new google.maps.Polyline({ clickable: false, map: cmdgeo.map, path: cmdgeo.map.route, strokeColor: 'Black', strokeOpacity: .6, strokeWeight: 3 });
-        }
-
-        // Add the position marker
-        cmdgeo.map.pm = new google.maps.Marker({position: getMapOptions(cmdgeo.settings).center, map: cmdgeo.map, icon: getPosMarker(cmdgeo.settings)});
-    };
-
-
-    function updateMap(pos) {
-        cmdgeo.map.pm.setPosition(new google.maps.LatLng(pos.coords.latitude, pos.coords.longitude));
-        cmdgeo.map.setCenter(cmdgeo.map.pm.position);
-    }
-
-    //////////////
-    // Messages //
-    //////////////
-
-    // Calls @fun when the length of @errs is bigger than zero, returns true if an error is dispatched and false if none is dispatched
-    function errorDispatcher(errs, fun) {
-        return errs.length > 0 ? !fun(errs) : false;
-    };
-
-    // Three error levels to pass messages to the programmer
-    function fail(thing) { throw new Error(thing); }
-    function warn(thing) { console.log(["WARNING:", thing].join(' ')); }
-    function note(thing) { console.log(["NOTE:", thing].join(' ')); }
-
-    ////////////////////////////
-    // Higher order functions //
-    ////////////////////////////
-
-    // Always returns @val which is captured in a closure
-    function always(val) {
-        return function () {
-            return val;
-        };
-    }
-
-    // Returns a collection of all values that don't belong to the results of @predicate.
-    function complement(predicate) {
-        return function() {
-            return !predicate.apply(null, _.toArray(arguments));
-        };
-    }
-
-    // Calls the function @action1 when @condition is met and @action2 if it is not.
-    function doWhen(condition, action1, action2) {
-        return truthy(condition) ? action1() : action2();
-    }
-
-    // Returns an instantiation of object @Target if it exists in the environment.
-    function instantiateIfExists(Target) {
-        return doWhen(existy(Target), function () {
-            return new Target();
-        });
-    }
-
-    // Circumvents the execution of @fun, checks its incomming arguments for null
-    // or undefined, fills in the original defaults if either is found, and then
-    // calls the original with the patched args.
-    function fnull(fun /*, defaults */) {
-        var defaults = _.rest(arguments);
-        return function(/* arguments */) {
-            return fun.apply(null, _.map(arguments, function(arg, i) {
-                return existy(arg) ? arg : defaults[i];
-            }));
-        };
-    }
-
-    // Returns a function that searches for a @key in the object @obj,
-    // if it doesn't exist it returns the @key from the default object @def.
-    function defaults(def) {
-        return function (obj, key) {
-            var val = fnull(_.identity, def[key]);
-            return obj && val(obj[key]);
-        };
-    }
-
-    // Returns a getter function that searches for a @key in object @obj, if
-    // @key is not present in @obj the returned function will pass the value for
-    // @key from default object @def.
-    function makeGetter(key, def) {
-        return function (obj) {
-            return defaults(def)(obj, key);
-        };
-    }
-
-    // Create a chain of validators that will be pulled over a passed @obj,
-    // returns an empty array or one filled with the messages from the passed
-    // @validators.
-    function checker(/* validators */) {
-        var validators = _.toArray(arguments);
-        return function(obj) {
-            return _.reduce(validators, function (errs, check) {
-                if (check(obj)){
-                    return errs;
-                }else{
-                    return _.chain(errs).push(check.message).value();
+/***
+* cmdaan.js
+*   Bevat functies voor CMDAan stijl geolocatie welke uitgelegd
+*   zijn tijdens het techniek college in week 5.
+*
+*   Author: J.P. Sturkenboom <j.p.sturkenboom@hva.nl>
+*   Credit: Dive into html5, geo.js, Nicholas C. Zakas
+*
+*   Copyleft 2012, all wrongs reversed.
+*/
+
+// Variable declaration
+var SANDBOX = "SANDBOX";
+var LINEAIR = "LINEAIR";
+var GPS_AVAILABLE = 'GPS_AVAILABLE';
+var GPS_UNAVAILABLE = 'GPS_UNAVAILABLE';
+var POSITION_UPDATED = 'POSITION_UPDATED';
+var REFRESH_RATE = 1000;
+var currentPosition = currentPositionMarker = customDebugging = debugId = map = interval =intervalCounter = updateMap = false;
+var locatieRij = markerRij = [];
+
+// Event functies - bron: http://www.nczonline.net/blog/2010/03/09/custom-events-in-javascript/ Copyright (c) 2010 Nicholas C. Zakas. All rights reserved. MIT License
+// Gebruik: ET.addListener('foo', handleEvent); ET.fire('event_name'); ET.removeListener('foo', handleEvent);
+function EventTarget(){this._listeners={}}
+EventTarget.prototype={constructor:EventTarget,addListener:function(a,c){"undefined"==typeof this._listeners[a]&&(this._listeners[a]=[]);this._listeners[a].push(c)},fire:function(a){"string"==typeof a&&(a={type:a});a.target||(a.target=this);if(!a.type)throw Error("Event object missing 'type' property.");if(this._listeners[a.type]instanceof Array)for(var c=this._listeners[a.type],b=0,d=c.length;b<d;b++)c[b].call(this,a)},removeListener:function(a,c){if(this._listeners[a]instanceof Array)for(var b=
+this._listeners[a],d=0,e=b.length;d<e;d++)if(b[d]===c){b.splice(d,1);break}}}; var ET = new EventTarget();
+
+// Test of GPS beschikbaar is (via geo.js) en vuur een event af
+function init(){
+    debug_message("Controleer of GPS beschikbaar is...");
+
+    ET.addListener(GPS_AVAILABLE, _start_interval);
+    ET.addListener(GPS_UNAVAILABLE, function(){debug_message('GPS is niet beschikbaar.')});
+
+    (geo_position_js.init())?ET.fire(GPS_AVAILABLE):ET.fire(GPS_UNAVAILABLE);
+}
+
+// Start een interval welke op basis van REFRESH_RATE de positie updated
+function _start_interval(event){
+    debug_message("GPS is beschikbaar, vraag positie.");
+    _update_position();
+    interval = self.setInterval(_update_position, REFRESH_RATE);
+    ET.addListener(POSITION_UPDATED, _check_locations);
+}
+
+// Vraag de huidige positie aan geo.js, stel een callback in voor het resultaat
+function _update_position(){
+    intervalCounter++;
+    geo_position_js.getCurrentPosition(_set_position, _geo_error_handler, {enableHighAccuracy:true});
+}
+
+// Callback functie voor het instellen van de huidige positie, vuurt een event af
+function _set_position(position){
+    currentPosition = position;
+    ET.fire("POSITION_UPDATED");
+    debug_message(intervalCounter+" positie lat:"+position.coords.latitude+" long:"+position.coords.longitude);
+}
+
+// Controleer de locaties en verwijs naar een andere pagina als we op een locatie zijn
+function _check_locations(event){
+    // Liefst buiten google maps om... maar helaas, ze hebben alle coole functies
+    for (var i = 0; i < locaties.length; i++) {
+        var locatie = {coords:{latitude: locaties[i][3],longitude: locaties[i][4]}};
+
+        if(_calculate_distance(locatie, currentPosition)<locaties[i][2]){
+
+            // Controle of we NU op die locatie zijn, zo niet gaan we naar de betreffende page
+            if(window.location!=locaties[i][1] && localStorage[locaties[i][0]]=="false"){
+                // Probeer local storage, als die bestaat incrementeer de locatie
+                try {
+                    (localStorage[locaties[i][0]]=="false")?localStorage[locaties[i][0]]=1:localStorage[locaties[i][0]]++;
+                } catch(error) {
+                    debug_message("Localstorage kan niet aangesproken worden: "+error);
                 }
-            }, []);
-        };
+
+// TODO: Animeer de betreffende marker
+
+                window.location = locaties[i][1];
+                debug_message("Speler is binnen een straal van "+ locaties[i][2] +" meter van "+locaties[i][0]);
+            }
+        }
+    }
+}
+
+// Bereken het verchil in meters tussen twee punten
+function _calculate_distance(p1, p2){
+    var pos1 = new google.maps.LatLng(p1.coords.latitude, p1.coords.longitude);
+    var pos2 = new google.maps.LatLng(p2.coords.latitude, p2.coords.longitude);
+    return Math.round(google.maps.geometry.spherical.computeDistanceBetween(pos1, pos2), 0);
+}
+
+
+// GOOGLE MAPS FUNCTIES
+/**
+ * generate_map(myOptions, canvasId)
+ *  roept op basis van meegegeven opties de google maps API aan
+ *  om een kaart te genereren en plaatst deze in het HTML element
+ *  wat aangeduid wordt door het meegegeven id.
+ *
+ *  @param myOptions:object - een object met in te stellen opties
+ *      voor de aanroep van de google maps API, kijk voor een over-
+ *      zicht van mogelijke opties op http://
+ *  @param canvasID:string - het id van het HTML element waar de
+ *      kaart in ge-rendered moet worden, <div> of <canvas>
+ */
+function generate_map(myOptions, canvasId){
+// TODO: Kan ik hier asynchroon nog de google maps api aanroepen? dit scheelt calls
+    debug_message("Genereer een Google Maps kaart en toon deze in #"+canvasId)
+    map = new google.maps.Map(document.getElementById(canvasId), myOptions);
+
+    var routeList = [];
+    // Voeg de markers toe aan de map afhankelijk van het tourtype
+    debug_message("Locaties intekenen, tourtype is: "+tourType);
+    for (var i = 0; i < locaties.length; i++) {
+
+        // Met kudos aan Tomas Harkema, probeer local storage, als het bestaat, voeg de locaties toe
+        try {
+            (localStorage.visited==undefined||isNumber(localStorage.visited))?localStorage[locaties[i][0]]=false:null;
+        } catch (error) {
+            debug_message("Localstorage kan niet aangesproken worden: "+error);
+        }
+
+        var markerLatLng = new google.maps.LatLng(locaties[i][3], locaties[i][4]);
+        routeList.push(markerLatLng);
+
+        markerRij[i] = {};
+        for (var attr in locatieMarker) {
+            markerRij[i][attr] = locatieMarker[attr];
+        }
+        markerRij[i].scale = locaties[i][2]/3;
+
+        var marker = new google.maps.Marker({
+            position: markerLatLng,
+            map: map,
+            icon: markerRij[i],
+            title: locaties[i][0]
+        });
+    }
+// TODO: Kleur aanpassen op het huidige punt van de tour
+    if(tourType == LINEAIR){
+        // Trek lijnen tussen de punten
+        debug_message("Route intekenen");
+        var route = new google.maps.Polyline({
+            clickable: false,
+            map: map,
+            path: routeList,
+            strokeColor: 'Black',
+            strokeOpacity: .6,
+            strokeWeight: 3
+        });
+
     }
 
-    // Create a validator function and the corresponding failure message.
-    function validator(message, fun) {
-        var f = function(/* args */) {
-            return fun.apply(fun, arguments);
-        };
-        f.message = message;
-        return f;
-    }
+    // Voeg de locatie van de persoon door
+    currentPositionMarker = new google.maps.Marker({
+        position: kaartOpties.center,
+        map: map,
+        icon: positieMarker,
+        title: 'U bevindt zich hier'
+    });
 
-}).call(this);
+    // Zorg dat de kaart geupdated wordt als het POSITION_UPDATED event afgevuurd wordt
+    ET.addListener(POSITION_UPDATED, update_positie);
+}
+
+function isNumber(n) {
+  return !isNaN(parseFloat(n)) && isFinite(n);
+}
+
+// Update de positie van de gebruiker op de kaart
+function update_positie(event){
+    // use currentPosition to center the map
+    var newPos = new google.maps.LatLng(currentPosition.coords.latitude, currentPosition.coords.longitude);
+    map.setCenter(newPos);
+    currentPositionMarker.setPosition(newPos);
+}
+
+// FUNCTIES VOOR DEBUGGING
+
+function _geo_error_handler(code, message) {
+    debug_message('geo.js error '+code+': '+message);
+}
+function debug_message(message){
+    (customDebugging && debugId)?document.getElementById(debugId).innerHTML:console.log(message);
+}
+function set_custom_debugging(debugId){
+    debugId = this.debugId;
+    customDebugging = true;
+}
