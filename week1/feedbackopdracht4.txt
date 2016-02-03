@@ -1,0 +1,3 @@
+camel case ipv underscores (function names)
+is Number apart object
+debug.debug_message = debug.message
