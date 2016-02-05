@@ -18,12 +18,15 @@
 
 	var sections = {
 		toggle: function(route){
+			var startBlock = document.getElementById('start');
+			var bestBlock = document.getElementById('best');
+			
 			if (route === 'start'){
-				document.getElementById('start').style.display='block';
-				document.getElementById('best').style.display='none';
+				startBlock.style.display='block';
+				bestBlock.style.display='none';
 			} else {
-				document.getElementById('start').style.display='none';
-				document.getElementById('best').style.display='block';
+				startBlock.style.display='none';
+				bestBlock.style.display='block';
 			}
 		}
 	};
